@@ -111,6 +111,9 @@ input,select{font:inherit}
 .item.info .ibody .title{font-weight:700; color:var(--red)}
 .doneBox{border-top:1px dashed var(--line); margin-top:2px; padding:9px 2px 7px; font-size:13px; color:var(--mut); text-align:center}
 .missed{background:var(--amber2); color:var(--amber); border-radius:14px; padding:11px 14px; font-size:13.5px; font-weight:600; margin-bottom:12px}
+.resched{background:var(--acc2); color:var(--acc); border-radius:14px; padding:11px 14px; font-size:13.5px; font-weight:600; margin-bottom:12px}
+.gap{background:var(--red2); color:var(--red); border-radius:14px; padding:11px 14px; font-size:13.5px; font-weight:600; margin-bottom:12px}
+.gap b, .resched b{font-weight:800}
 
 /* ---------- 计划页 ---------- */
 .seg{display:flex; background:var(--line); border-radius:12px; padding:3px; margin-bottom:12px}
@@ -131,6 +134,8 @@ input,select{font:inherit}
 .st-ok{background:var(--green2); color:var(--green)}
 .st-due{background:var(--red2); color:var(--red)}
 .st-wait{background:var(--line); color:var(--mut)}
+.gear{flex:0 0 auto; min-width:30px; height:30px; padding:0 8px; border-radius:8px; background:var(--acc2); color:var(--acc); display:inline-flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; white-space:nowrap}
+.idleNote{font-size:12.5px; color:var(--mut); padding:10px 2px}
 
 /* ---------- 设置页 ---------- */
 .setRow{display:flex; align-items:center; justify-content:space-between; gap:12px; padding:13px 2px; border-top:1px solid var(--line)}
@@ -152,6 +157,21 @@ input[type=date]{border:1px solid var(--line); background:var(--card); color:var
 .tabbar button{display:flex; flex-direction:column; align-items:center; gap:1px; padding:5px 0; color:var(--mut); font-size:11px; font-weight:600}
 .tabbar button .ico{font-size:21px; line-height:1.2}
 .tabbar button.on{color:var(--acc)}
+
+/* ---------- 调整弹层 ---------- */
+.modalWrap{position:fixed; inset:0; z-index:120; background:rgba(8,12,24,.55); display:flex; align-items:flex-end; justify-content:center}
+.modal{background:var(--card); width:100%; max-width:520px; border-radius:20px 20px 0 0; padding:18px 18px calc(20px + env(safe-area-inset-bottom)); box-shadow:0 -8px 30px rgba(0,0,0,.25)}
+.mTitle{font-weight:800; font-size:16px}
+.mSub{font-size:12.5px; color:var(--mut); margin:4px 0 12px}
+.capChips{display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px}
+.capChips button{padding:9px 14px; border-radius:10px; background:var(--line); font-weight:700; font-size:13.5px; color:var(--ink)}
+.capChips button.on{background:var(--acc); color:#fff}
+.capCustom{display:flex; gap:8px; align-items:center; margin-bottom:4px}
+.capCustom input{width:100px; border:1px solid var(--line); background:var(--card); color:var(--ink); border-radius:10px; padding:8px; font-size:15px}
+.capCustom .lab{font-size:12.5px; color:var(--mut)}
+.mBtns{display:flex; gap:10px; margin-top:14px}
+.mBtns .btn{margin-top:0}
+body.modalOpen{overflow:hidden}
 </style>
 </head>
 <body>
@@ -425,7 +445,7 @@ const wdCN = s => '周' + WD[parseD(s).getDay()];
 const fmtDate = s => { const d = parseD(s); return (d.getMonth()+1) + '/' + d.getDate(); };
 
 let state = Object.assign(
-  {checked:{}, examDate:D.config.examDate, speed:D.config.defaultSpeed, theme:'auto'},
+  {checked:{}, caps:{}, examDate:D.config.examDate, speed:D.config.defaultSpeed, theme:'auto'},
   (()=>{ try{ return JSON.parse(localStorage.getItem(KEY)) || {} }catch(e){ return {} } })()
 );
 const persist = () => { try{ localStorage.setItem(KEY, JSON.stringify(state)) }catch(e){} };
@@ -440,243 +460,321 @@ const effMin = sec => Math.round(sec / 60 / state.speed);
 const fmtDur = min => { if(min < 1) return '0分'; const h = Math.floor(min/60), m = min % 60; return (h ? h+'小时' : '') + (m ? m+'分' : ''); };
 const fmtClock = s => Math.floor(s/3600) + ':' + pad2(Math.floor(s%3600/60)) + ':' + pad2(s%60);
 
-// 所有计时任务（视频按倍速折算 + 阶段二按预估分钟）
-function timedItems(){
-  const list = [];
-  for(const day of D.daysP1) for(const n of day.lessons){
-    const l = LM.get(n);
-    list.push({id:'v'+pad2(n), date:day.date, min:effMin(l.sec), video:true, title:l.title, sub:null, num:pad2(n), sec:l.sec, pdf:l.pdf, optional:false});
-  }
-  for(const day of D.phase2) day.items.forEach((it,i) => {
-    if(it.min === 0 && !it.optional) return; // 考试等信息行不计入统计
-    list.push({id:'p2-'+day.date+'-'+i, date:day.date, min:it.min, video:false, title:it.title, sub:it.subject, optional:!!it.optional});
-  });
-  return list;
-}
+/* ---------- 任务与容量模型 ---------- */
+// 某天“原始安排”的任务（含考试信息行）
 function itemsOfDay(date){
   const day = D.daysP1.find(x => x.date === date);
   const out = [];
   if(day) for(const n of day.lessons){
     const l = LM.get(n);
-    out.push({id:'v'+pad2(n), min:effMin(l.sec), video:true, title:l.title, sub:null, num:pad2(n), sec:l.sec, pdf:l.pdf, optional:false});
+    out.push({id:'v'+pad2(n), date:date, min:effMin(l.sec), video:true, title:l.title, num:pad2(n), sec:l.sec, pdf:l.pdf, optional:false});
   }
   const p2 = P2MAP.get(date);
-  if(p2) p2.items.forEach((it,i) => out.push({id:'p2-'+date+'-'+i, min:it.min, video:false, title:it.title, sub:it.subject, optional:!!it.optional, info:(it.min===0 && !it.optional)}));
+  if(p2) p2.items.forEach((it,i) => out.push({id:'p2-'+date+'-'+i, date:date, min:it.min, video:false, title:it.title, sub:it.subject, optional:!!it.optional, info:(it.min===0 && !it.optional)}));
   return out;
+}
+function itemsOfRange(a,b){
+  const out = [];
+  const d = parseD(a);
+  while(iso(d) <= b){ out.push(...itemsOfDay(iso(d))); d.setDate(d.getDate()+1); }
+  return out;
+}
+function timedItems(){
+  return itemsOfRange(D.config.planStart, exam2ISO()).filter(x => !x.info);
+}
+// 默认容量 = 该天原始必做负载；空白的缓冲/机动日给固定容量
+function defaultCap(date){
+  const load = itemsOfDay(date).filter(t => !t.optional && !t.info).reduce((s,t)=>s+t.min,0);
+  if(load > 0) return load;
+  const sp = specialOf(date) || '';
+  if(sp.includes('缓冲')) return 180;
+  if(sp.includes('机动')) return 120;
+  return 0;
+}
+const capOf = date => (state.caps && state.caps[date] !== undefined) ? state.caps[date] : defaultCap(date);
+
+// 全部未完成任务，按原计划日期排序（顺序即优先级）
+function taskQueue(){
+  return timedItems()
+    .filter(t => !state.checked[t.id])
+    .map(t => Object.assign({}, t, {capMin: t.optional ? 0 : t.min}))
+    .sort((a,b) => a.date < b.date ? -1 : (a.date > b.date ? 1 : 0));
+}
+// 从今天起按容量贪心填充；塞不下的计入缺口
+function buildSchedule(){
+  const t = todayISO(), end = exam2ISO();
+  const queue = taskQueue();
+  const sched = {}; let gi = 0, overflow = 0;
+  const d = parseD(t);
+  while(iso(d) <= end){
+    const date = iso(d);
+    let cap = capOf(date), used = 0; const arr = [];
+    while(gi < queue.length){
+      const task = queue[gi];
+      if(task.capMin === 0 || task.capMin <= cap - used){ arr.push(task); used += task.capMin; gi++; } else break;
+    }
+    sched[date] = {tasks:arr, used, cap};
+    d.setDate(d.getDate()+1);
+  }
+  const rest = queue.slice(gi);
+  overflow = rest.filter(x => x.capMin > 0).reduce((s,x)=>s+x.capMin,0);
+  return {sched, overflow, rescheduled: queue.filter(x => x.date < t).length};
 }
 
 /* ---------- 渲染 ---------- */
-let tab = 'today', planSub = null, expanded = new Set(), showDone = true;
+let tab = 'today', planSub = 'sched', expanded = new Set();
 let lastDate = todayISO();
+let modalDate = null, modalSel = 'def';
 
-function videoRow(it){
-  const done = !!state.checked[it.id];
-  return `<div class="item${done?' done':''}" data-id="${it.id}">
-    <button class="chk" data-id="${it.id}" aria-label="标记完成">${done?'✓':''}</button>
+function videoRow(t, forDate){
+  const done = !!state.checked[t.id];
+  const from = (forDate && t.date && t.date !== forDate) ? ' · ↩'+fmtDate(t.date)+'顺延' : '';
+  return `<div class="item${done?' done':''}" data-id="${t.id}">
+    <button class="chk" data-id="${t.id}" aria-label="标记完成">${done?'✓':''}</button>
     <div class="ibody">
-      <div class="t1"><span class="num">${it.num}</span><span class="title">${esc(it.title)}</span></div>
-      <div class="t2">原速 ${fmtClock(it.sec)}${it.pdf?' · 📄含讲义':''}</div>
+      <div class="t1"><span class="num">${t.num}</span><span class="title">${esc(t.title)}</span></div>
+      <div class="t2">原速 ${fmtClock(t.sec)}${t.pdf?' · 📄含讲义':''}${from}</div>
     </div>
-    <div class="dur">≈${it.min}分</div>
+    <div class="dur">≈${t.min}分</div>
   </div>`;
 }
-function p2Row(it, id){
-  if(it.info) return `<div class="item info"><div class="ibody"><div class="t1"><span class="chip ${it.subject}">考试</span><span class="title">${esc(it.title)}</span></div></div></div>`;
-  const done = !!state.checked[id];
-  return `<div class="item${done?' done':''}${it.optional?' opt':''}" data-id="${id}">
-    <button class="chk" data-id="${id}" aria-label="标记完成">${done?'✓':''}</button>
+function p2Row(t, forDate){
+  if(t.info) return `<div class="item info"><div class="ibody"><div class="t1"><span class="chip ${t.sub||'通用'}">考试</span><span class="title">${esc(t.title)}</span></div></div></div>`;
+  const done = !!state.checked[t.id];
+  const from = (forDate && t.date && t.date !== forDate) ? ' · ↩'+fmtDate(t.date)+'顺延' : '';
+  return `<div class="item${done?' done':''}${t.optional?' opt':''}" data-id="${t.id}">
+    <button class="chk" data-id="${t.id}" aria-label="标记完成">${done?'✓':''}</button>
     <div class="ibody">
-      <div class="t1"><span class="chip ${it.sub}">${it.sub}</span><span class="title">${esc(it.title)}</span></div>
+      <div class="t1"><span class="chip ${t.sub}">${t.sub}</span><span class="title">${esc(t.title)}</span></div>
     </div>
-    <div class="dur">${it.min}分</div>
+    <div class="dur">${t.min}分</div>
   </div>`;
 }
-function dayCard(date, rows, opts={}){
-  const t = todayISO();
-  const timed = rows.filter(r => !r.info);
-  const doneN = timed.filter(r => state.checked[r.id]).length;
-  const open = expanded.has(date) || (opts.autoOpen && date === t);
-  const ph = phaseOf(date);
+function rowFor(t, forDate){ return t.video ? videoRow(t, forDate) : p2Row(t, forDate); }
+
+function badgesFor(date, includeType){
   const badges = [];
-  if(ph){
-    const bmap = {task:'b-task', flexible:'b-flex', buffer:'b-buffer', exam:'b-exam'};
-    const nmap = {task:'任务日', flexible:'弹性日', buffer:'机动日', exam:'考试日'};
-    if(ph.key !== 'p1' && ph.key !== 'a') badges.push(`<span class="badge ${bmap[ph.type]}">${nmap[ph.type]}</span>`);
+  const ph = phaseOf(date);
+  if(ph && includeType && ['flexible','buffer','exam'].includes(ph.type)){
+    const nmap = {flexible:'弹性日', buffer:'机动日', exam:'考试日'};
+    const bmap = {flexible:'b-flex', buffer:'b-buffer', exam:'b-exam'};
+    badges.push(`<span class="badge ${bmap[ph.type]}">${nmap[ph.type]}</span>`);
   }
   const sp = specialOf(date);
-  if(sp) badges.push(`<span class="badge ${sp==='调休上班'?'b-dUT':'b-fest'}">${sp}</span>`);
+  if(sp && sp !== '考试日') badges.push(`<span class="badge ${sp==='调休上班'?'b-dUT':(sp.includes('缓冲')?'b-buffer':'b-fest')}">${sp}</span>`);
+  return badges.join('');
+}
+function dayCard(date, tasks, opts={}){
+  const t = todayISO();
+  const timed = tasks.filter(r => !r.info);
+  const doneN = timed.filter(r => state.checked[r.id]).length;
+  const open = expanded.has(date) || (opts.autoOpen && date === t);
   const meta = opts.meta || '';
+  const gear = (date >= t && date <= exam2ISO()) ? `<button class="gear" data-gear="${date}">调</button>` : '';
+  const body = tasks.length
+    ? tasks.map(x => rowFor(x, date)).join('')
+    : `<div class="idleNote">${opts.idleNote || '当天无安排'}</div>`;
   return `<div class="card daycard${open?' open':''}" data-date="${date}">
     <div class="head dayHeadBtn" data-date="${date}">
       <span class="caret">▶</span>
       <div class="dayHead">
-        <div class="d1"><span>${fmtDate(date)} ${wdCN(date)}</span>${badges.join('')}</div>
-        <div class="d2">${meta ? meta : (ph && ph.name !== '刷课期' ? ph.name : '')}</div>
+        <div class="d1"><span>${fmtDate(date)} ${wdCN(date)}</span>${badgesFor(date, true)}</div>
+        <div class="d2">${meta}</div>
       </div>
-      <span class="mut" style="font-size:12.5px;white-space:nowrap">${doneN}/${timed.length}</span>
+      ${gear}
+      <span class="mut" style="font-size:12.5px;white-space:nowrap;margin-left:2px">${timed.length?doneN+'/'+timed.length:''}</span>
     </div>
-    <div class="dayBody">${rows.map(r => r.video ? videoRow(r) : p2Row(r.item, r.id)).join('')}${opts.foot||''}</div>
+    <div class="dayBody">${body}</div>
   </div>`;
 }
-function rowListForP1(date){
-  const day = D.daysP1.find(x => x.date === date);
-  return day.lessons.map(n => { const l = LM.get(n); return {id:'v'+pad2(n), video:true, min:effMin(l.sec), title:l.title, num:pad2(n), sec:l.sec, pdf:l.pdf, optional:false}; });
+function capLabel(date){
+  const cap = capOf(date);
+  if(state.caps[date] !== undefined) return '容量' + fmtDur(cap) + '（已调）';
+  return '容量' + fmtDur(cap);
 }
-function rowListForP2(date){
-  const p2 = P2MAP.get(date);
-  if(!p2) return [];
-  return p2.items.map((it,i) => ({id:'p2-'+date+'-'+i, video:false, min:it.min, title:it.title, sub:it.subject, optional:!!it.optional, info:(it.min===0 && !it.optional), item:it}));
+function gapBanner(overflow){
+  if(overflow <= 0) return '';
+  return `<div class="gap">⚠️ 按当前安排，考前还缺 <b>≈${fmtDur(overflow)}</b>。建议依次：砍可选任务 → 用掉机动日(10/9) → 国庆保底降为1小时 → 案例题量减1/3 → 套卷4套改3套 → 冲刺二刷减一轮 → 视频换1.5倍速。或在「计划·日程」里调大某些天的容量。</div>`;
 }
 
 function renderToday(){
   const t = todayISO();
-  const start = D.config.planStart, end = D.config.examDate2;
-  let dToExam = dayDiff(t, state.examDate);
-  let dToExam2 = dayDiff(t, exam2ISO());
+  const start = D.config.planStart, end = exam2ISO();
+  const dToExam = dayDiff(t, state.examDate);
+  const dToExam2 = dayDiff(t, end);
   const ph = phaseOf(t);
-  let hero, listHTML = '';
+  const S = buildSchedule();
   const all = timedItems();
   const totalRemain = all.filter(x => !state.checked[x.id] && !x.optional).reduce((s,x)=>s+x.min,0);
   const totalAll = all.filter(x => !x.optional).reduce((s,x)=>s+x.min,0);
   const pct = totalAll ? Math.round((1 - totalRemain/totalAll)*100) : 0;
+  const watched = all.filter(x => state.checked[x.id]).reduce((s,x)=>s+x.min,0);
 
-  hero = `<div class="hero">
+  let html = `<div class="hero">
     <div class="lab">距《${D.config.examSubject1}》开考</div>
     <div class="big">${dToExam>0 ? dToExam : (dToExam===0?'今天':'-'+(-dToExam))}<small>天</small></div>
-    <div class="sub">${state.examDate} 《${D.config.examSubject1}》 · ${exam2ISO()} 《${D.config.examSubject2}》${dToExam2>0 ? ' · 案例还剩'+dToExam2+'天' : ''}</div>
+    <div class="sub">${state.examDate} 《${D.config.examSubject1}》 · ${end} 《${D.config.examSubject2}》${dToExam2>0 ? ' · 案例还剩'+dToExam2+'天' : ''}</div>
     <div class="chips">
       ${ph ? `<span class="hchip">当前：${ph.name} · 第${dayDiff(ph.start, t < ph.start ? ph.start : (t > ph.end ? ph.end : t))+1}/${dayDiff(ph.start, ph.end)+1}天</span>` : ''}
       <span class="hchip">总进度 ${pct}%</span>
+      <span class="hchip">已看 ${fmtDur(watched)}</span>
       <span class="hchip">剩余 ${fmtDur(totalRemain)}</span>
     </div>
   </div>`;
 
   if(t < start){
-    listHTML = `<div class="missed">计划将于 9/4（今晚）开始，先去「计划」页看看整体安排吧。</div>` + todayPreview(D.config.planStart);
-  } else if(t > end){
-    listHTML = `<div class="card"><div class="head">🎉 考试已结束</div><div class="note">辛苦了！剩下的交给成绩。勾选记录仍可在「计划」页查看。</div></div>`;
-  } else {
-    const date = t;
-    const rows = itemsOfDay(date);
-    const todo = rows.filter(r => !r.info && !state.checked[r.id] && !r.optional);
-    const done = rows.filter(r => !r.info && state.checked[r.id]);
-    const infoRows = rows.filter(r => r.info);
-    const remainMin = todo.reduce((s,x)=>s+x.min,0);
-    // 此前未完成
-    const missedItems = all.filter(x => x.date < t && !state.checked[x.id] && !x.optional);
-    if(missedItems.length) listHTML += `<div class="missed">⏰ 此前还有 ${missedItems.length} 项（约${fmtDur(missedItems.reduce((s,x)=>s+x.min,0))}）未完成，去「计划」页补进度</div>`;
-    listHTML += `<div class="stats">
-      <div class="stat"><div class="k">今日剩余</div><div class="v small">${fmtDur(remainMin)}</div></div>
-      <div class="stat"><div class="k">全部剩余</div><div class="v small">${fmtDur(totalRemain)}</div></div>
-      <div class="stat"><div class="k">今日完成</div><div class="v">${done.length}/${todo.length+done.length}</div></div>
-    </div>`;
-    const dayObj = D.daysP1.find(x=>x.date===date);
-    const phToday = phaseOf(date);
-    const headNote = [];
-    if(dayObj && dayObj.note) headNote.push(dayObj.note);
-    const badges = [];
-    if(phToday && ['flexible','buffer','exam'].includes(phToday.type)){
-      const nmap = {flexible:'弹性日', buffer:'机动日', exam:'考试日'};
-      const bmap = {flexible:'b-flex', buffer:'b-buffer', exam:'b-exam'};
-      badges.push(`<span class="badge ${bmap[phToday.type]}">${nmap[phToday.type]}</span>`);
-    }
-    const sp = specialOf(date);
-    if(sp) badges.push(`<span class="badge ${sp==='调休上班'?'b-dUT':'b-fest'}">${sp}</span>`);
-    listHTML += `<div class="card">
-      <div class="head"><span>${fmtDate(date)} ${wdCN(date)} · 今日任务</span>${badges.join('')}</div>
-      ${headNote.length?`<div class="note" style="padding:0 0 4px">${esc(headNote.join(' · '))}</div>`:''}
-      ${rows.map(r => r.info ? p2Row(r.item, r.id) : (r.video ? videoRow(r) : p2Row(r, r.id))).join('')}
-      ${done.length ? `<div class="doneBox">已完成 ${done.length} 项，继续加油 💪</div>` : ''}
-    </div>`;
+    const rows = itemsOfDay(start);
+    html += `<div class="resched">计划将于 ${fmtDate(start)} 开始，先去「计划」页看整体安排。</div>
+    <div class="card"><div class="head">${fmtDate(start)} ${wdCN(start)} · 首日预览</div>${rows.map(x => rowFor(x, start)).join('')}</div>`;
+    $('#app').innerHTML = html; return;
   }
-  $('#app').innerHTML = hero + listHTML;
-}
-function todayPreview(date){
-  const rows = itemsOfDay(date);
-  return `<div class="card"><div class="head">9/4 ${wdCN(date)} · 首日任务预览</div>
-    <div class="note">今晚从轻：3节课约1.5小时（1.2倍速）</div>
-    ${rows.map(r => videoRow(r)).join('')}</div>`;
+  if(t > end){
+    html += `<div class="card"><div class="head">🎉 考试已结束</div><div class="note">辛苦了！勾选记录仍可在「计划」页查看。</div></div>`;
+    $('#app').innerHTML = html; return;
+  }
+
+  const slot = S.sched[t] || {tasks:[]};
+  const tasks = slot.tasks;
+  const infoRows = itemsOfDay(t).filter(x => x.info);
+  const todo = tasks.filter(x => !state.checked[x.id] && !x.optional);
+  const done = tasks.filter(x => state.checked[x.id]);
+  const remainMin = todo.reduce((s,x)=>s+x.min,0);
+  const cap0 = capOf(t) === 0;
+  const spill = S.rescheduled;
+
+  if(spill > 0) html += `<div class="resched">↩ 已自动顺延 <b>${spill}</b> 项欠账进近期安排（任务带 ↩ 标记）</div>`;
+  html += gapBanner(S.overflow);
+  html += `<div class="stats">
+    <div class="stat"><div class="k">今日剩余</div><div class="v small">${cap0 ? '已顺延' : fmtDur(remainMin)}</div></div>
+    <div class="stat"><div class="k">全部剩余</div><div class="v small">${fmtDur(totalRemain)}</div></div>
+    <div class="stat"><div class="k">今日完成</div><div class="v">${done.length}/${todo.length+done.length}</div></div>
+  </div>`;
+
+  const dayObj = D.daysP1.find(x=>x.date===t);
+  const badges = badgesFor(t, true);
+  const noteBits = [];
+  if(dayObj && dayObj.note) noteBits.push(esc(dayObj.note));
+  html += `<div class="card">
+    <div class="head"><span>${fmtDate(t)} ${wdCN(t)} · 今日任务</span>${badges}
+      <span style="flex:1"></span>
+      <button class="gear" id="btnSkipToday">${cap0 ? '已顺延·恢复' : '没空·顺延'}</button>
+    </div>
+    ${noteBits.length?`<div class="note" style="padding:0 0 4px">${noteBits.join(' · ')}</div>`:''}
+    ${cap0
+      ? `<div class="idleNote">今天已顺延：任务已自动排入之后的日子。点右上角「已顺延·恢复」可撤销。</div>`
+      : tasks.map(x => rowFor(x, t)).join('')}
+    ${infoRows.map(x => rowFor(x, t)).join('')}
+    ${done.length && !cap0 ? `<div class="doneBox">已完成 ${done.length} 项，继续加油 💪</div>` : ''}
+  </div>`;
+  $('#app').innerHTML = html;
 }
 
 function renderPlan(){
-  if(!planSub) planSub = (todayISO() <= '2026-09-10') ? 'p1' : 'p2';
+  if(!planSub) planSub = 'sched';
+  const t = todayISO(), end = exam2ISO();
   const all = timedItems();
   const doneN = all.filter(x => state.checked[x.id]).length;
   const remain = all.filter(x => !state.checked[x.id] && !x.optional).reduce((s,x)=>s+x.min,0);
   const total = all.filter(x => !x.optional).reduce((s,x)=>s+x.min,0);
   const pct = total ? Math.round((1-remain/total)*100) : 0;
+  const S = buildSchedule();
+
   let html = `<div class="card"><div class="progress"><i style="width:${pct}%"></i></div>
-    <div class="p-label"><span>总进度 ${pct}% · 已完成 ${doneN}/${all.filter(x=>!x.optional).length} 项</span><span>剩余 ≈${fmtDur(remain)}</span></div>
+    <div class="p-label"><span>总进度 ${pct}% · 已看 ≈${fmtDur(all.filter(x=>state.checked[x.id]).reduce((s,x)=>s+x.min,0))}</span><span>剩余 ≈${fmtDur(remain)}</span></div>
   </div>`;
   html += `<div class="seg">
-    <button data-sub="p1" class="${planSub==='p1'?'on':''}">① 刷课7天</button>
-    <button data-sub="p2" class="${planSub==='p2'?'on':''}">② 刷题与冲刺</button>
-    <button data-sub="ms" class="${planSub==='ms'?'on':''}">里程碑</button>
+    <button data-sub="sched" class="${planSub==='sched'?'on':''}">📅 日程</button>
+    <button data-sub="ms" class="${planSub==='ms'?'on':''}">🏁 里程碑</button>
   </div>`;
-  const t = todayISO();
-  if(planSub === 'p1'){
-    for(const day of D.daysP1){
-      const rows = rowListForP1(day.date);
-      const sum = rows.reduce((s,x)=>s+x.min,0);
-      const meta = `${rows.length}节 · ≈${fmtDur(sum)}${day.note?' · '+esc(day.note):''}`;
-      html += dayCard(day.date, rows, {meta, autoOpen:true, foot:''});
-    }
-  } else if(planSub === 'p2'){
-    for(const ph of D.phases.filter(p => p.key !== 'p1')){
-      const days = D.phase2.filter(d => d.date >= ph.start && d.date <= ph.end);
-      if(!days.length) continue;
-      html += `<div class="groupLab">${esc(ph.name)} ${fmtDate(ph.start)}–${fmtDate(ph.end)} · ${esc(ph.desc)}</div>`;
-      for(const day of days){
-        const rows = rowListForP2(day.date);
-        html += dayCard(day.date, rows, {autoOpen:true});
+
+  if(planSub === 'sched'){
+    let capSum = 0; const d0 = parseD(t);
+    while(iso(d0) <= end){ capSum += capOf(iso(d0)); d0.setDate(d0.getDate()+1); }
+    const gap = Math.max(0, remain - capSum);
+    const hasOverrides = Object.keys(state.caps || {}).length > 0;
+    html += `<div class="card"><div class="head" style="padding-bottom:4px">考前健康度
+      ${gap>0 ? '<span class="badge b-exam">缺口 '+fmtDur(gap)+'</span>' : (hasOverrides ? '<span class="badge b-task">已重排</span>' : '<span class="badge b-buffer">节奏正常</span>')}
+    </div>
+    <div class="note" style="padding:0 0 8px">剩余任务 ≈${fmtDur(remain)} ÷ 剩余容量 ≈${fmtDur(capSum)}（今天→考试，含缓冲日）${gap>0 ? '，<b style="color:var(--red)">考前还缺 '+fmtDur(gap)+'</b>' : (hasOverrides ? '，重排后仍可完成 ✅' : '')}</div>
+    ${hasOverrides ? '<button class="btn" id="btnRestorePlan">↺ 恢复官方计划（清除全部调整）</button>' : ''}
+    </div>`;
+
+    let curPhase = null;
+    const d = parseD(D.config.planStart);
+    while(iso(d) <= end){
+      const date = iso(d);
+      const ph = phaseOf(date);
+      if(ph && ph.key !== curPhase){
+        curPhase = ph.key;
+        html += `<div class="groupLab">${esc(ph.name)} ${fmtDate(ph.start)}–${fmtDate(ph.end)} · ${esc(ph.desc)}</div>`;
       }
+      if(date < t){
+        const rows = itemsOfDay(date);
+        const sum = rows.filter(x=>!x.info).reduce((s,x)=>s+x.min,0);
+        const dayObj = D.daysP1.find(x=>x.date===date);
+        html += dayCard(date, rows, {meta:(rows.length?rows.length+'节 · ':'')+'≈'+fmtDur(sum)+((dayObj&&dayObj.note)?' · '+esc(dayObj.note):''), autoOpen:false});
+      } else {
+        const slot = S.sched[date] || {tasks:[]};
+        const tasks = slot.tasks;
+        const load = tasks.filter(x=>!x.optional&&!x.info).reduce((s,x)=>s+x.min,0);
+        let meta = (date === t ? '今天 · ' : '') + (tasks.length ? tasks.length+'项 · 负载≈'+fmtDur(load)+' · ' : '') + capLabel(date);
+        let idleNote = null;
+        if(!tasks.length){
+          if(capOf(date) === 0) idleNote = '休息日 / 已清空：任务已顺延至之后';
+          else idleNote = '富余 '+fmtDur(capOf(date))+'：可主动加练或提前';
+        }
+        html += dayCard(date, tasks, {meta, autoOpen:true, idleNote});
+      }
+      d.setDate(d.getDate()+1);
     }
   } else {
+    const t2 = todayISO();
     const msDone = D.milestones.filter(m => state.checked[m.id]).length;
     html += `<div class="groupLab">套卷里程碑（进度 ${msDone}/4）——只考核节点，不排死每天</div>`;
     for(const m of D.milestones){
       const done = !!state.checked[m.id];
-      const dd = dayDiff(t, m.due);
+      const dd = dayDiff(t2, m.due);
       let st, cls;
       if(done){ st='已完成'; cls='st-ok'; }
       else if(dd < 0){ st='已过期 '+fmtDate(m.due); cls='st-due'; }
       else if(dd === 0){ st='今天截止'; cls='st-due'; }
       else { st='截止 '+fmtDate(m.due)+' · 还有'+dd+'天'; cls='st-wait'; }
       html += `<div class="card msCard"><div class="head"><div class="chkBig">
-        <button class="chk${done?'':''}" data-id="${m.id}" style="${done?'background:var(--acc);border-color:var(--acc);opacity:1':''}" aria-label="里程碑完成">${done?'✓':''}</button>
+        <button class="chk" data-id="${m.id}" style="${done?'background:var(--acc);border-color:var(--acc);opacity:1':''}">${done?'✓':''}</button>
         <div class="ibody"><div class="t1"><span class="title">${esc(m.title)}</span></div>
         <div class="due">📌 ${esc(m.due)} ${wdCN(m.due)}</div></div>
         <span class="st ${cls}">${st}</span>
       </div></div></div>`;
     }
-    html += `<div class="card"><div class="note" style="padding:10px 0 2px">💡 里程碑制：到截止日完成即可，哪天做、哪天歇自己定。假期波动自动被吸收；落后先吃机动日（10/9）和假期加练，不动冲刺周。</div></div>`;
+    html += `<div class="card"><div class="note" style="padding:10px 0 2px">💡 里程碑制：到截止日完成即可，哪天做、哪天歇自己定。落后先吃机动日(10/9)和假期加练，不动冲刺周。</div></div>`;
   }
   $('#app').innerHTML = html;
 }
 
 function renderSet(){
-  const sp = state.speed;
   $('#app').innerHTML = `
   <div class="card">
     <div class="setRow"><div><div class="k">考试日期（倒计时目标）</div><div class="d">默认 ${D.config.examDate}《${D.config.examSubject1}》，次日考案例</div></div>
       <input type="date" id="examDate" value="${state.examDate}"></div>
-    <div class="setRow"><div><div class="k">视频倍速</div><div class="d">当前按 ${sp}x 折算观看时长，改动后全站重算</div></div>
-      <div class="miniSeg" id="speedSeg">${[1,1.2,1.5].map(v=>`<button data-v="${v}" class="${sp===v?'on':''}">${v}x</button>`).join('')}</div></div>
+    <div class="setRow"><div><div class="k">视频倍速</div><div class="d">当前按 ${state.speed}x 折算观看时长，改动后全站重算</div></div>
+      <div class="miniSeg" id="speedSeg">${[1,1.2,1.5].map(v=>`<button data-v="${v}" class="${state.speed===v?'on':''}">${v}x</button>`).join('')}</div></div>
     <div class="setRow"><div><div class="k">外观</div><div class="d">深色模式跟随系统，或手动指定</div></div>
       <div class="miniSeg" id="themeSeg">${[['auto','自动'],['light','浅色'],['dark','深色']].map(([v,n])=>`<button data-v="${v}" class="${state.theme===v?'on':''}">${n}</button>`).join('')}</div></div>
   </div>
   <div class="card">
-    <div class="setRow"><div><div class="k">数据备份</div><div class="d">勾选记录仅存本机浏览器，建议定期导出</div></div></div>
+    <div class="setRow"><div><div class="k">动态调整</div><div class="d">在「计划 · 日程」里点某天的「调」改容量/清空；今日页可一键顺延</div></div></div>
+    <button class="btn" id="btnRestorePlan2">↺ 恢复官方计划（清除全部容量调整）</button>
+  </div>
+  <div class="card">
+    <div class="setRow"><div><div class="k">数据备份</div><div class="d">勾选与调整仅存本机浏览器，建议定期导出</div></div></div>
     <button class="btn" id="btnExport">导出（复制到剪贴板）</button>
     <button class="btn" id="btnImport">导入（粘贴备份）</button>
-    <button class="btn danger" id="btnReset">清空全部勾选记录</button>
+    <button class="btn danger" id="btnReset">清空勾选与调整</button>
   </div>
-  <div class="about">一造备考工作台 · 数据 100% 本地存储，不上传任何服务器<br>《计价》63节 · 原速 ${fmtClock(D.config.videoTotalSec)} · 阶段二 35 天 · 距考试见首页</div>`;
+  <div class="about">一造备考工作台 · 数据 100% 本地存储，不上传任何服务器<br>《计价》63节 · 原速 ${fmtClock(D.config.videoTotalSec)} · 距考试见首页</div>`;
 }
 
-function applyTheme(){
-  document.documentElement.dataset.theme = state.theme;
-}
+function applyTheme(){ document.documentElement.dataset.theme = state.theme; }
 function render(){
   applyTheme();
   if(tab === 'today') renderToday();
@@ -692,11 +790,60 @@ function toggle(id){
   render();
 }
 
+/* ---------- 容量调整弹层 ---------- */
+const CAP_PRESETS = [['def','默认'],['0','清零'],['30','30分'],['60','1h'],['120','2h'],['180','3h'],['240','4h']];
+function openDayCfg(date){
+  modalDate = date;
+  modalSel = (state.caps[date] !== undefined) ? String(state.caps[date]) : 'def';
+  renderModal();
+  document.body.classList.add('modalOpen');
+}
+function renderModal(){
+  const date = modalDate;
+  const load = itemsOfDay(date).filter(x=>!x.optional&&!x.info).reduce((s,x)=>s+x.min,0);
+  const chips = CAP_PRESETS.map(([v,n]) => `<button data-v="${v}" class="${modalSel===v?'on':''}">${n}</button>`).join('');
+  let overlay = document.getElementById('modalWrap');
+  if(!overlay){
+    overlay = document.createElement('div');
+    overlay.id = 'modalWrap'; overlay.className = 'modalWrap';
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `<div class="modal">
+    <div class="mTitle">${fmtDate(date)} ${wdCN(date)} · 调整这一天</div>
+    <div class="mSub">原定负载 ≈${fmtDur(load)}。清零 = 这天空（任务自动顺延）；调大 = 多扛一些。保存后从今天起自动重排。</div>
+    <div class="capChips">${chips}</div>
+    <div class="capCustom"><input id="capInput" type="number" min="0" max="720" step="15" placeholder="自定义"><span class="lab">分钟（保存前输入生效）</span></div>
+    <div class="mBtns">
+      <button class="btn" id="capApply">保存</button>
+      <button class="btn" id="capDef" style="background:var(--line);color:var(--mut)">恢复默认</button>
+      <button class="btn danger" id="capClose">关闭</button>
+    </div>
+  </div>`;
+}
+function closeDayCfg(){
+  const o = document.getElementById('modalWrap'); if(o) o.remove();
+  document.body.classList.remove('modalOpen');
+  modalDate = null; render();
+}
+function applyDayCfg(){
+  if(!state.caps) state.caps = {};
+  if(modalSel === 'def') delete state.caps[modalDate];
+  else state.caps[modalDate] = parseInt(modalSel,10) || 0;
+  persist();
+  closeDayCfg();
+}
+function fallbackCopy(txt){
+  const ta = document.createElement('textarea');
+  ta.value = txt; document.body.appendChild(ta); ta.select();
+  try{ document.execCommand('copy'); alert('已复制到剪贴板'); }catch(e){ alert('复制失败，请手动记录'); }
+  ta.remove();
+}
+
 document.addEventListener('click', e => {
   const chk = e.target.closest('.chk');
   if(chk && chk.dataset.id){ toggle(chk.dataset.id); return; }
-  const dh = e.target.closest('.dayHeadBtn');
-  if(dh){ const d = dh.dataset.date; expanded.has(d) ? expanded.delete(d) : expanded.add(d); render(); return; }
+  const gearBtn = e.target.closest('[data-gear]');
+  if(gearBtn){ openDayCfg(gearBtn.dataset.gear); return; }
   const st = e.target.closest('#tabbar button');
   if(st){ tab = st.dataset.tab; window.scrollTo(0,0); render(); return; }
   const sg = e.target.closest('.seg button');
@@ -705,13 +852,27 @@ document.addEventListener('click', e => {
   if(spd){ state.speed = parseFloat(spd.dataset.v); persist(); render(); return; }
   const th = e.target.closest('#themeSeg button');
   if(th){ state.theme = th.dataset.v; persist(); render(); return; }
-});
-document.addEventListener('change', e => {
-  if(e.target.id === 'examDate' && e.target.value){ state.examDate = e.target.value; persist(); render(); }
-});
-document.addEventListener('click', e => {
+  if(e.target.id === 'btnSkipToday'){
+    const t = todayISO();
+    if(capOf(t) === 0) delete state.caps[t]; else state.caps[t] = 0;
+    persist(); render(); return;
+  }
+  if(e.target.id === 'btnRestorePlan' || e.target.id === 'btnRestorePlan2'){
+    if(confirm('清除所有容量调整，恢复官方计划？')){ state.caps = {}; persist(); render(); }
+    return;
+  }
+  const cc = e.target.closest('.capChips button');
+  if(cc){ modalSel = cc.dataset.v; renderModal(); return; }
+  if(e.target.id === 'capApply'){
+    const inp = document.getElementById('capInput');
+    if(inp && inp.value !== '' && modalSel !== 'def'){ modalSel = String(parseInt(inp.value,10) || 0); }
+    applyDayCfg(); return;
+  }
+  if(e.target.id === 'capDef'){ if(modalDate){ delete state.caps[modalDate]; persist(); } closeDayCfg(); return; }
+  if(e.target.id === 'capClose'){ closeDayCfg(); return; }
+  if(e.target.id === 'modalWrap'){ closeDayCfg(); return; }
   if(e.target.id === 'btnExport'){
-    const txt = JSON.stringify({v:1, exportedAt:todayISO(), checked:state.checked});
+    const txt = JSON.stringify({v:2, exportedAt:todayISO(), checked:state.checked, caps:state.caps});
     if(navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt).then(()=>alert('已复制到剪贴板，粘贴保存即可'), ()=>fallbackCopy(txt));
     else fallbackCopy(txt);
   }
@@ -721,20 +882,16 @@ document.addEventListener('click', e => {
     try{
       const obj = JSON.parse(txt);
       if(!obj.checked) throw 0;
-      state.checked = obj.checked; persist(); render(); alert('导入成功：已恢复 '+Object.keys(obj.checked).length+' 条记录');
+      state.checked = obj.checked; state.caps = obj.caps || {}; persist(); render(); alert('导入成功：已恢复 '+Object.keys(obj.checked).length+' 条记录');
     }catch(err){ alert('导入失败：内容不是有效备份'); }
   }
   if(e.target.id === 'btnReset'){
-    if(confirm('确定清空全部勾选记录？此操作不可恢复')){ state.checked = {}; persist(); render(); }
+    if(confirm('确定清空全部勾选与调整记录？此操作不可恢复')){ state.checked = {}; state.caps = {}; persist(); render(); }
   }
 });
-function fallbackCopy(txt){
-  const ta = document.createElement('textarea');
-  ta.value = txt; document.body.appendChild(ta); ta.select();
-  try{ document.execCommand('copy'); alert('已复制到剪贴板'); }catch(e){ alert('复制失败，请手动记录'); }
-  ta.remove();
-}
-// 跨天自动刷新
+document.addEventListener('change', e => {
+  if(e.target.id === 'examDate' && e.target.value){ state.examDate = e.target.value; persist(); render(); }
+});
 setInterval(() => { const t = todayISO(); if(t !== lastDate){ lastDate = t; render(); } }, 60000);
 
 // 离线缓存：托管在 https 下时注册 Service Worker，首次访问后即可断网使用
