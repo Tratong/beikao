@@ -1,6 +1,6 @@
 // 一造备考工作台 · 离线缓存 Service Worker
 // 首次联网访问后缓存全部应用资源；之后断网也能完整使用，数据存手机本地。
-const CACHE = 'beikao-v1';
+const CACHE = 'beikao-v2';
 const ASSETS = ['./', './index.html', './manifest.json', './icon-180.png', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

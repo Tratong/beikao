@@ -607,8 +607,25 @@ function renderToday(){
   const all = timedItems();
   const totalRemain = all.filter(x => !state.checked[x.id] && !x.optional).reduce((s,x)=>s+x.min,0);
   const totalAll = all.filter(x => !x.optional).reduce((s,x)=>s+x.min,0);
+  const videoRemain = all.filter(x => !state.checked[x.id] && !x.optional && x.video).reduce((s,x)=>s+x.min,0);
+  const taskRemain = all.filter(x => !state.checked[x.id] && !x.optional && !x.video).reduce((s,x)=>s+x.min,0);
   const pct = totalAll ? Math.round((1 - totalRemain/totalAll)*100) : 0;
   const watched = all.filter(x => state.checked[x.id]).reduce((s,x)=>s+x.min,0);
+
+  const phKey = ph ? ph.key : 'p1';
+  const caseDone = all.filter(x => state.checked[x.id] && !x.video && x.sub === '案例').length;
+  const vDoneN = all.filter(x => state.checked[x.id] && x.video).length;
+  const msDoneN = D.milestones.filter(m => state.checked[m.id]).length;
+  let chipsHTML = '';
+  if(phKey === 'p1'){
+    chipsHTML = `<span class="hchip">已看 ${fmtDur(watched)}</span><span class="hchip">视频剩 ${fmtDur(videoRemain)}</span><span class="hchip">红线 9/13</span>`;
+  } else if(phKey === 'a' || phKey === 'zq'){
+    chipsHTML = `<span class="hchip">任务剩 ${fmtDur(taskRemain)}</span><span class="hchip">案例已做 ${caseDone} 道</span>`;
+  } else if(phKey === 'b'){
+    chipsHTML = `<span class="hchip">任务剩 ${fmtDur(taskRemain)}</span><span class="hchip">里程碑 ${msDoneN}/4</span>`;
+  } else {
+    chipsHTML = `<span class="hchip">任务剩 ${fmtDur(taskRemain)}</span>`;
+  }
 
   let html = `<div class="hero">
     <div class="lab">距《${D.config.examSubject1}》开考</div>
@@ -617,8 +634,7 @@ function renderToday(){
     <div class="chips">
       ${ph ? `<span class="hchip">当前：${ph.name} · 第${dayDiff(ph.start, t < ph.start ? ph.start : (t > ph.end ? ph.end : t))+1}/${dayDiff(ph.start, ph.end)+1}天</span>` : ''}
       <span class="hchip">总进度 ${pct}%</span>
-      <span class="hchip">已看 ${fmtDur(watched)}</span>
-      <span class="hchip">剩余 ${fmtDur(totalRemain)}</span>
+      ${chipsHTML}
     </div>
   </div>`;
 
@@ -644,11 +660,33 @@ function renderToday(){
 
   if(spill > 0) html += `<div class="resched">↩ 已自动顺延 <b>${spill}</b> 项欠账进近期安排（任务带 ↩ 标记）</div>`;
   html += gapBanner(S.overflow);
-  html += `<div class="stats">
-    <div class="stat"><div class="k">今日剩余</div><div class="v small">${cap0 ? '已顺延' : fmtDur(remainMin)}</div></div>
-    <div class="stat"><div class="k">全部剩余</div><div class="v small">${fmtDur(totalRemain)}</div></div>
-    <div class="stat"><div class="k">今日完成</div><div class="v">${done.length}/${todo.length+done.length}</div></div>
-  </div>`;
+  let statCells;
+  if(phKey === 'p1'){
+    statCells = [
+      ['今日剩余', cap0 ? '已顺延' : fmtDur(remainMin)],
+      ['视频剩余', fmtDur(videoRemain)],
+      ['课程进度', vDoneN + '/63节']
+    ];
+  } else if(phKey === 'a' || phKey === 'zq'){
+    statCells = [
+      ['今日剩余', cap0 ? '已顺延' : fmtDur(remainMin)],
+      ['阶段任务剩余', fmtDur(taskRemain)],
+      ['案例已做', caseDone + ' 道']
+    ];
+  } else if(phKey === 'b'){
+    statCells = [
+      ['今日剩余', cap0 ? '已顺延' : fmtDur(remainMin)],
+      ['阶段任务剩余', fmtDur(taskRemain)],
+      ['里程碑', msDoneN + '/4']
+    ];
+  } else {
+    statCells = [
+      ['今日剩余', cap0 ? '已顺延' : fmtDur(remainMin)],
+      ['冲刺任务剩余', fmtDur(taskRemain)],
+      ['距计价', dToExam >= 0 ? dToExam + '天' : '已开考']
+    ];
+  }
+  html += `<div class="stats">${statCells.map(([k,v]) => `<div class="stat"><div class="k">${k}</div><div class="v small">${v}</div></div>`).join('')}</div>`;
 
   const dayObj = D.daysP1.find(x=>x.date===t);
   const badges = badgesFor(t, true);
@@ -680,7 +718,7 @@ function renderPlan(){
   const S = buildSchedule();
 
   let html = `<div class="card"><div class="progress"><i style="width:${pct}%"></i></div>
-    <div class="p-label"><span>总进度 ${pct}% · 已看 ≈${fmtDur(all.filter(x=>state.checked[x.id]).reduce((s,x)=>s+x.min,0))}</span><span>剩余 ≈${fmtDur(remain)}</span></div>
+    <div class="p-label"><span>总进度 ${pct}% · 已看 ≈${fmtDur(all.filter(x=>state.checked[x.id]).reduce((s,x)=>s+x.min,0))}</span><span>剩余 ≈${fmtDur(remain)}（视频+任务）</span></div>
   </div>`;
   html += `<div class="seg">
     <button data-sub="sched" class="${planSub==='sched'?'on':''}">📅 日程</button>
@@ -695,7 +733,7 @@ function renderPlan(){
     html += `<div class="card"><div class="head" style="padding-bottom:4px">考前健康度
       ${gap>0 ? '<span class="badge b-exam">缺口 '+fmtDur(gap)+'</span>' : (hasOverrides ? '<span class="badge b-task">已重排</span>' : '<span class="badge b-buffer">节奏正常</span>')}
     </div>
-    <div class="note" style="padding:0 0 8px">剩余任务 ≈${fmtDur(remain)} ÷ 剩余容量 ≈${fmtDur(capSum)}（今天→考试，含缓冲日）${gap>0 ? '，<b style="color:var(--red)">考前还缺 '+fmtDur(gap)+'</b>' : (hasOverrides ? '，重排后仍可完成 ✅' : '')}</div>
+    <div class="note" style="padding:0 0 8px">剩余任务（视频＋刷题冲刺）≈${fmtDur(remain)} ÷ 剩余容量 ≈${fmtDur(capSum)}（今天→考试）${gap>0 ? '，<b style="color:var(--red)">考前还缺 '+fmtDur(gap)+'</b>' : (hasOverrides ? '，重排后仍可完成 ✅' : '')}</div>
     ${hasOverrides ? '<button class="btn" id="btnRestorePlan">↺ 恢复官方计划（清除全部调整）</button>' : ''}
     </div>`;
 
@@ -844,6 +882,8 @@ document.addEventListener('click', e => {
   if(chk && chk.dataset.id){ toggle(chk.dataset.id); return; }
   const gearBtn = e.target.closest('[data-gear]');
   if(gearBtn){ openDayCfg(gearBtn.dataset.gear); return; }
+  const dh = e.target.closest('.dayHeadBtn');
+  if(dh){ const d = dh.dataset.date; expanded.has(d) ? expanded.delete(d) : expanded.add(d); render(); return; }
   const st = e.target.closest('#tabbar button');
   if(st){ tab = st.dataset.tab; window.scrollTo(0,0); render(); return; }
   const sg = e.target.closest('.seg button');
